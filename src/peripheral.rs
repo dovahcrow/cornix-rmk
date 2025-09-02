@@ -3,7 +3,9 @@
 
 #[macro_use]
 mod macros;
+mod constants;
 
+use crate::constants::{INPUT_PIN_NUM, L2CAP_MTU, L2CAP_RXQ, L2CAP_TXQ, OUTPUT_PIN_NUM};
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Input, Output};
@@ -19,7 +21,7 @@ use rand_chacha::ChaCha12Rng;
 use rand_core::SeedableRng;
 use rmk::ble::trouble::build_ble_stack;
 use rmk::channel::EVENT_CHANNEL;
-use rmk::config::{BleBatteryConfig, StorageConfig};
+use rmk::config::StorageConfig;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::futures::future::join;
 use rmk::input_device::rotary_encoder::RotaryEncoder;
@@ -28,10 +30,8 @@ use rmk::split::peripheral::run_rmk_split_peripheral;
 use rmk::storage::new_storage_for_split_peripheral;
 use rmk::{HostResources, run_devices};
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
 
-const INPUT_PIN_NUM: usize = 4;
-const OUTPUT_PIN_NUM: usize = 7;
+use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<USBD>;
@@ -48,15 +48,6 @@ bind_interrupts!(struct Irqs {
 async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
-
-/// How many outgoing L2CAP buffers per link
-const L2CAP_TXQ: u8 = 3;
-
-/// How many incoming L2CAP buffers per link
-const L2CAP_RXQ: u8 = 3;
-
-/// Size of L2CAP packets
-const L2CAP_MTU: usize = 251;
 
 fn build_sdc<'d, const N: usize>(
     p: nrf_sdc::Peripherals<'d>,
@@ -126,7 +117,7 @@ async fn main(spawner: Spawner) {
     );
     let mut rng = rng::Rng::new(p.RNG, Irqs);
     let mut rng_generator = ChaCha12Rng::from_rng(&mut rng).unwrap();
-    let mut sdc_mem = sdc::Mem::<6144>::new();
+    let mut sdc_mem = sdc::Mem::<8192>::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
 
     let mut resources = HostResources::new();
@@ -134,12 +125,9 @@ async fn main(spawner: Spawner) {
 
     // Initialize the ADC. We are only using one channel for detecting battery level
     let adc_pin = p.P0_05.degrade_saadc();
-    let is_charging_pin = Input::new(p.P1_11, embassy_nrf::gpio::Pull::Up);
     let saadc = init_adc(adc_pin, p.SAADC);
     // Wait for ADC calibration.
     saadc.calibrate().await;
-
-    let ble_battery_config = BleBatteryConfig::new(Some(is_charging_pin), false, None, false);
 
     let (input_pins, output_pins) = config_matrix_pins_nrf!(peripherals: p, input: [P1_09, P0_28, P0_03, P1_10], output:  [P0_09, P0_10, P1_13, P0_02, P0_29, P0_31, P0_30]);
 
@@ -150,7 +138,7 @@ async fn main(spawner: Spawner) {
     let storage_config = StorageConfig {
         start_addr: 0xA0000, // 384K
         num_sectors: 32,     // 128K
-        clear_storage: true,
+        clear_storage: false,
         ..Default::default()
     };
     let flash = Flash::take(mpsl, p.NVMC);

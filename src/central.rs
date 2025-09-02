@@ -4,12 +4,13 @@
 mod vial;
 #[macro_use]
 mod macros;
+mod constants;
 mod keymap;
+mod led;
 
-use crate::keymap::{COL, NUM_ENCODER, NUM_LAYER, ROW};
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
-use embassy_nrf::gpio::{Input, Level, Output, OutputDrive};
+use embassy_nrf::gpio::{Input, Output, Pull};
 use embassy_nrf::interrupt::{self, InterruptExt};
 use embassy_nrf::mode::Async;
 use embassy_nrf::peripherals::{RNG, SAADC, USBD};
@@ -25,50 +26,33 @@ use rand_chacha::ChaCha12Rng;
 use rand_core::SeedableRng;
 use rmk::ble::trouble::build_ble_stack;
 use rmk::channel::EVENT_CHANNEL;
-use rmk::config::{
-    BehaviorConfig, BleBatteryConfig, KeyboardUsbConfig, MorseConfig, RmkConfig, StorageConfig,
-    VialConfig,
-};
-use rmk::controller::EventController as _;
-use rmk::controller::led_indicator::{KeyboardIndicator, KeyboardIndicatorController};
+use rmk::config::{BehaviorConfig, BleBatteryConfig, RmkConfig, StorageConfig, TapHoldConfig};
+use rmk::controller::PollingController;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
-use rmk::futures::future::{join, join4};
+use rmk::futures::future::{join3, join4};
 use rmk::input_device::Runnable;
 use rmk::input_device::adc::{AnalogEventType, NrfAdc};
 use rmk::input_device::battery::BatteryProcessor;
 use rmk::input_device::rotary_encoder::RotaryEncoder;
 use rmk::keyboard::Keyboard;
-use rmk::morse::MorseKeyMode;
+use rmk::morse::MorseMode;
 use rmk::split::ble::central::read_peripheral_addresses;
 use rmk::split::central::{CentralMatrix, run_peripheral_manager};
 use rmk::{
     HostResources, initialize_encoder_keymap_and_storage, run_devices, run_processor_chain, run_rmk,
 };
 use static_cell::StaticCell;
-use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 use {defmt_rtt as _, panic_probe as _};
 
-const MANUFACTURE: &'static str = "Cornix";
-const PRODUCT_NAME: &'static str = "Cornix";
-const VID: u16 = 0xe11b;
-const PID: u16 = 0x0001;
-const KEYBOARD_USB_CONFIG: KeyboardUsbConfig = KeyboardUsbConfig {
-    vid: VID,
-    pid: PID,
-    manufacturer: MANUFACTURE,
-    product_name: PRODUCT_NAME,
-    serial_number: "vial:f64c2b3c:000001",
+use crate::constants::{
+    INPUT_PIN_NUM, KEYBOARD_USB_CONFIG, L2CAP_MTU, L2CAP_RXQ, L2CAP_TXQ, OUTPUT_PIN_NUM,
 };
+use crate::keymap::{COL, NUM_ENCODER, NUM_LAYER, ROW};
+use crate::led::LedController;
+use crate::vial::VIAL_CONFIG;
 
-const VIAL_CONFIG: VialConfig = VialConfig {
-    vial_keyboard_id: &VIAL_KEYBOARD_ID,
-    vial_keyboard_def: &VIAL_KEYBOARD_DEF,
-    unlock_keys: &[(1, 1), (1, 2)],
-};
-
-const INPUT_PIN_NUM: usize = 4;
-const OUTPUT_PIN_NUM: usize = 7;
+// embassy_nrf::interrupt_mod!(PWM0);
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<USBD>;
@@ -85,15 +69,6 @@ bind_interrupts!(struct Irqs {
 async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
-
-/// How many outgoing L2CAP buffers per link
-const L2CAP_TXQ: u8 = 3;
-
-/// How many incoming L2CAP buffers per link
-const L2CAP_RXQ: u8 = 3;
-
-/// Size of L2CAP packets
-const L2CAP_MTU: usize = 251;
 
 fn build_sdc<'d, const N: usize>(
     p: nrf_sdc::Peripherals<'d>,
@@ -133,12 +108,7 @@ fn ble_addr() -> [u8; 6] {
     let addr = high << 32 | u64::from(ficr.deviceid(0).read());
     let addr = addr | 0x0000_c000_0000_0000;
     unwrap!(addr.to_le_bytes()[..6].try_into())
-
-    // [0x18, 0xe2, 0x21, 0x80, 0xc0, 0xc7]
 }
-
-static MPSL: StaticCell<MultiprotocolServiceLayer> = StaticCell::new();
-static SESSION_MEM: StaticCell<mpsl::SessionMem<1>> = StaticCell::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -158,12 +128,15 @@ async fn main(spawner: Spawner) {
         accuracy_ppm: mpsl::raw::MPSL_DEFAULT_CLOCK_ACCURACY_PPM as u16,
         skip_wait_lfclk_started: mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED != 0,
     };
-    let session_mem = SESSION_MEM.init(mpsl::SessionMem::new());
+
+    static MPSL: StaticCell<MultiprotocolServiceLayer> = StaticCell::new();
+    static SESSION_MEM: StaticCell<mpsl::SessionMem<1>> = StaticCell::new();
+
     let mpsl = MPSL.init(unwrap!(mpsl::MultiprotocolServiceLayer::with_timeslots(
         mpsl_p,
         Irqs,
         lfclk_cfg,
-        session_mem
+        SESSION_MEM.init(mpsl::SessionMem::new())
     )));
     spawner.must_spawn(mpsl_task(&*mpsl));
     let sdc_p = sdc::Peripherals::new(
@@ -172,7 +145,7 @@ async fn main(spawner: Spawner) {
     );
     let mut rng = rng::Rng::new(p.RNG, Irqs);
     let mut rng_gen = ChaCha12Rng::from_rng(&mut rng).unwrap();
-    let mut sdc_mem = sdc::Mem::<6144>::new();
+    let mut sdc_mem = sdc::Mem::<8192>::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
     let mut host_resources = HostResources::new();
     let stack = build_ble_stack(sdc, ble_addr(), &mut rng_gen, &mut host_resources).await;
@@ -193,51 +166,47 @@ async fn main(spawner: Spawner) {
     saadc.calibrate().await;
 
     // Keyboard config
-    let ble_battery_config = BleBatteryConfig::new(
-        Some(Input::new(p.P1_09, embassy_nrf::gpio::Pull::Up)),
-        false,
-        Some(Output::new(p.P0_24, Level::Low, OutputDrive::Standard)),
-        false,
-    );
     let storage_config = StorageConfig {
         start_addr: 0xA0000,
-        num_sectors: 6,
-        clear_storage: true,
+        num_sectors: 32,
+        clear_storage: false,
         ..Default::default()
     };
     let rmk_config = RmkConfig {
         usb_config: KEYBOARD_USB_CONFIG,
         vial_config: VIAL_CONFIG,
-        ble_battery_config,
+        ble_battery_config: BleBatteryConfig::new(
+            Some(Input::new(p.P1_09, Pull::Up)),
+            false,
+            None,
+            false,
+        ),
         storage_config,
-        ..Default::default()
     };
 
     // Initialze keyboard stuffs
     // Initialize the storage and keymap
-    let mut default_keymap = keymap::get_default_keymap();
-    let keyboard_macros = keymap::get_macros();
-    let combo = keymap::get_combos();
-    let behavior_config = BehaviorConfig {
-        keyboard_macros,
-        combo,
-        morse: MorseConfig {
+    let mut behavior_config = BehaviorConfig {
+        keyboard_macros: keymap::get_macros(),
+        combo: keymap::get_combos(),
+        morse: keymap::get_morses(),
+        tap_hold: TapHoldConfig {
             enable_hrm: true,
-            prior_idle_time: Duration::from_millis(120u64),
-            operation_timeout: Duration::from_millis(200u64),
-            mode: MorseKeyMode::PermissiveHold,
+            prior_idle_time: Duration::from_millis(30u64),
+            timeout: Duration::from_millis(200u64),
+            mode: MorseMode::PermissiveHold,
             unilateral_tap: true,
-            ..Default::default()
         },
         ..Default::default()
     };
-    let mut encoder_map = keymap::get_default_encoder_map();
+    let mut keymap = keymap::get_keymap();
+    let mut encoder_map = keymap::get_encoder_map();
     let (keymap, mut storage) = initialize_encoder_keymap_and_storage(
-        &mut default_keymap,
+        &mut keymap,
         &mut encoder_map,
         flash,
         &storage_config,
-        behavior_config,
+        &mut behavior_config,
     )
     .await;
 
@@ -271,17 +240,8 @@ async fn main(spawner: Spawner) {
     );
     let mut batt_proc = BatteryProcessor::new(2000, 2806, &keymap);
 
+    let mut led_controller = LedController::new(p.PWM0, p.P0_24, p.P0_13);
     // Initialize the controllers
-    let mut capslock_led = KeyboardIndicatorController::new(
-        Output::new(
-            p.P0_00,
-            embassy_nrf::gpio::Level::Low,
-            embassy_nrf::gpio::OutputDrive::Standard,
-        ),
-        false,
-        KeyboardIndicator::CapsLock,
-    );
-
     // Start
     join4(
         run_devices! (
@@ -290,10 +250,15 @@ async fn main(spawner: Spawner) {
         run_processor_chain! {
             EVENT_CHANNEL => [batt_proc],
         },
-        join(keyboard.run(), capslock_led.event_loop()),
-        join(
-            run_peripheral_manager::<4, 7, 0, 7, _>(0, peripheral_addrs[0], &stack),
+        keyboard.run(),
+        join3(
+            run_peripheral_manager::<INPUT_PIN_NUM, OUTPUT_PIN_NUM, 0, 7, _>(
+                0,
+                peripheral_addrs[0],
+                &stack,
+            ),
             run_rmk(&keymap, driver, &stack, &mut storage, rmk_config),
+            led_controller.polling_loop(),
         ),
     )
     .await;
