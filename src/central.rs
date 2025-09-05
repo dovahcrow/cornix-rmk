@@ -10,15 +10,19 @@ mod led;
 
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
-use embassy_nrf::gpio::{Input, Output, Pull};
+use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::interrupt::{self, InterruptExt};
 use embassy_nrf::mode::Async;
 use embassy_nrf::peripherals::{RNG, SAADC, USBD};
+use embassy_nrf::pwm::{
+    Prescaler, SequenceConfig, SequenceLoad, SequencePwm, SingleSequenceMode, SingleSequencer,
+};
 use embassy_nrf::saadc::{self, AnyInput, Input as _, Saadc};
 use embassy_nrf::usb::Driver;
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
-use embassy_nrf::{Peri, bind_interrupts, rng, usb};
+use embassy_nrf::{Peri, bind_interrupts, pwm, rng, usb};
 use embassy_time::Duration;
+use heapless::Vec;
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
@@ -45,9 +49,11 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use crate::constants::{
-    INPUT_PIN_NUM, KEYBOARD_USB_CONFIG, L2CAP_MTU, L2CAP_RXQ, L2CAP_TXQ, OUTPUT_PIN_NUM,
+    CLEAR_STORAGE, INPUT_PIN_NUM, KEYBOARD_USB_CONFIG, L2CAP_MTU, L2CAP_RXQ, L2CAP_TXQ,
+    OUTPUT_PIN_NUM,
 };
 use crate::keymap::{COL, NUM_ENCODER, NUM_LAYER, ROW};
+use crate::led::{T0H, T1H};
 use crate::vial::VIAL_CONFIG;
 
 bind_interrupts!(struct Irqs {
@@ -165,7 +171,7 @@ async fn main(spawner: Spawner) {
     let storage_config = StorageConfig {
         start_addr: 0xA0000,
         num_sectors: 32,
-        clear_storage: false,
+        clear_storage: CLEAR_STORAGE,
         ..Default::default()
     };
     let rmk_config = RmkConfig {
@@ -236,6 +242,31 @@ async fn main(spawner: Spawner) {
     );
     let mut batt_proc = BatteryProcessor::new(2000, 2806, &keymap);
 
+    let mut config = pwm::Config::default();
+    config.sequence_load = SequenceLoad::Common;
+    config.prescaler = Prescaler::Div1;
+    config.max_duty = 20; // 1.25us (1s / 16Mhz * 20)
+    config.ch0_drive = OutputDrive::HighDrive;
+    let seq_words = [
+        T0H, T0H, T0H, T0H, T0H, T0H, T0H, T0H, // G
+        T0H, T0H, T0H, T0H, T0H, T0H, T0H, T0H, // R
+        T1H, T1H, T1H, T1H, T1H, T1H, T1H, T1H, // B
+        //
+        T0H, T0H, T0H, T0H, T0H, T0H, T0H, T0H, // G
+        T0H, T0H, T0H, T0H, T0H, T0H, T0H, T0H, // R
+        T1H, T1H, T1H, T1H, T1H, T1H, T1H, T1H, // B
+    ];
+    let mut pwm = unwrap!(SequencePwm::new_1ch(p.PWM0, p.P0_24, config));
+
+    Output::new(p.P0_13, Level::Low, OutputDrive::HighDrive).set_high();
+
+    let mut seq_config = SequenceConfig::default();
+    seq_config.end_delay = 800; // 50us (20 ticks * 40)
+
+    let sequences = SingleSequencer::new(&mut pwm, &seq_words, seq_config);
+    unwrap!(sequences.start(SingleSequenceMode::Infinite));
+
+    // let mut led_controller = LedController::new(unsafe { &mut *(&mut pwm as *mut _) }, &seq_words);
     // Initialize the controllers
     // Start
     join4(

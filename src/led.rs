@@ -1,7 +1,7 @@
 use defmt::unwrap;
 use embassy_nrf::{
     Peri, PeripheralType,
-    gpio::{Level, Output, OutputDrive, Pin},
+    gpio::{AnyPin, Level, Output, OutputDrive, Pin},
     pwm::{
         Config, Instance, Prescaler, SequenceConfig, SequenceLoad, SequencePwm, SingleSequenceMode,
         SingleSequencer,
@@ -14,60 +14,37 @@ use rmk::{
     event::ControllerEvent,
 };
 
-const T1H: u16 = 0x0 | 13; // Duty = 13/20 ticks (0.8us/1.25us) for a 1
-const T0H: u16 = 0x0 | 7; // Duty 7/20 ticks (0.4us/1.25us) for a 0
-const RES: u16 = 0x0;
+pub const T1H: u16 = 13; // Duty = 13/20 ticks (0.8us/1.25us) for a 1
+pub const T0H: u16 = 7; // Duty 7/20 ticks (0.4us/1.25us) for a 0
 
-pub struct LedController<'d, T>
+pub struct LedController<'s, 'd, T>
 where
     T: PeripheralType + Instance,
 {
     sub: ControllerSub,
-    pwm: SequencePwm<'d, T>,
-    seq_config: SequenceConfig,
-    color_bit: usize,
-    bit_value: u16,
-    seq_words: [u16; 10],
+    sequencer: SingleSequencer<'s, 'd, T>,
 }
 
-impl<'d, T> LedController<'d, T>
+impl<'s, 'd, T> LedController<'s, 'd, T>
 where
+    'd: 's,
     T: PeripheralType + Instance,
 {
-    pub fn new<D>(pwm: Peri<'d, T>, ch0: Peri<'d, D>, en: Peri<'d, impl Pin>) -> Self
-    where
-        D: Pin,
-    {
-        let mut config = Config::default();
-        config.sequence_load = SequenceLoad::Common;
-        config.prescaler = Prescaler::Div1;
-        config.max_duty = 20; // 1.25us (1s / 16Mhz * 20)
-        // let pwm = unwrap!(SequencePwm::new_1ch(pwm, ch0, config));
-        let pwm = unwrap!(SequencePwm::new_1ch(pwm, ch0, config));
-
-        Output::new(en, Level::Low, OutputDrive::Standard).set_high();
-
-        let seq_words = [
-            T0H, T0H, T0H, // G
-            T0H, T0H, T0H, // R
-            T1H, T1H, T1H, // B
-            RES,
-        ];
+    pub fn new(pwm: &'s mut SequencePwm<'d, T>, seq_words: &'s [u16]) -> Self {
         let mut seq_config = SequenceConfig::default();
-        seq_config.end_delay = 799; // 50us (20 ticks * 40) - 1 tick because we've already got one RES;
+        seq_config.end_delay = 800; // 50us (20 ticks * 40) - 1 tick because we've already got one RES;
+
+        let sequences = SingleSequencer::new(pwm, seq_words, seq_config);
+        unwrap!(sequences.start(SingleSequenceMode::Infinite));
 
         Self {
             sub: unwrap!(CONTROLLER_CHANNEL.subscriber()),
-            pwm,
-            seq_config,
-            color_bit: 16,
-            bit_value: T0H,
-            seq_words,
+            sequencer: sequences,
         }
     }
 }
 
-impl<'a, T> Controller for LedController<'a, T>
+impl<'s, 'd, T> Controller for LedController<'s, 'd, T>
 where
     T: PeripheralType + Instance,
 {
@@ -85,18 +62,18 @@ where
     }
 }
 
-impl<'a, T> PollingController for LedController<'a, T>
+impl<'s, 'd, T> PollingController for LedController<'s, 'd, T>
 where
     T: PeripheralType + Instance,
 {
     const INTERVAL: Duration = Duration::from_millis(100);
 
     async fn update(&mut self) {
-        let sequences =
-            SingleSequencer::new(&mut self.pwm, &self.seq_words, self.seq_config.clone());
-        unwrap!(sequences.start(SingleSequenceMode::Infinite));
+        // let sequences =
+        //     SingleSequencer::new(&mut self.pwm, &self.seq_words, self.seq_config.clone());
+        // unwrap!(sequences.start(SingleSequenceMode::Infinite));
 
-        drop(sequences);
+        // drop(sequences);
 
         // self.seq_words[self.color_bit] = self.bit_value;
     }

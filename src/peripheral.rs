@@ -5,7 +5,9 @@
 mod macros;
 mod constants;
 
-use crate::constants::{INPUT_PIN_NUM, L2CAP_MTU, L2CAP_RXQ, L2CAP_TXQ, OUTPUT_PIN_NUM};
+use crate::constants::{
+    CLEAR_STORAGE, INPUT_PIN_NUM, L2CAP_MTU, L2CAP_RXQ, L2CAP_TXQ, OUTPUT_PIN_NUM,
+};
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Input, Output};
@@ -138,7 +140,7 @@ async fn main(spawner: Spawner) {
     let storage_config = StorageConfig {
         start_addr: 0xA0000, // 384K
         num_sectors: 32,     // 128K
-        clear_storage: false,
+        clear_storage: CLEAR_STORAGE,
         ..Default::default()
     };
     let flash = Flash::take(mpsl, p.NVMC);

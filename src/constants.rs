@@ -25,3 +25,5 @@ pub const L2CAP_RXQ: u8 = 4;
 
 /// Size of L2CAP packets
 pub const L2CAP_MTU: usize = 251;
+
+pub const CLEAR_STORAGE: bool = false;
