@@ -1,13 +1,14 @@
 use defmt::unwrap;
 use embassy_time::Duration;
-use rmk::action::{Action, EncoderAction, KeyAction};
 use rmk::combo::Combo;
 use rmk::config::macro_config::KeyboardMacrosConfig;
 use rmk::config::{CombosConfig, MorsesConfig};
 use rmk::heapless::Vec;
 use rmk::keyboard_macros::define_macro_sequences;
-use rmk::keycode::{KeyCode, ModifierCombination};
 use rmk::morse::{Morse, MorseMode, MorsePattern};
+use rmk::types::action::{Action, EncoderAction, KeyAction};
+use rmk::types::keycode::KeyCode;
+use rmk::types::modifier::ModifierCombination;
 use rmk::{a, encoder, k, mt, wm};
 
 pub(crate) const COL: usize = 14;

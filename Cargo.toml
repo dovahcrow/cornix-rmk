@@ -10,7 +10,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rmk = { path = "../rmk/rmk", features = [
+rmk = { git = "https://github.com/HaoboGu/rmk", branch = "fix/tapdance_read", features = [
     "nrf52840_ble",
     "split",
     "async_matrix",
