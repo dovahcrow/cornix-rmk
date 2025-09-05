@@ -45,7 +45,7 @@ where
         // let pwm = unwrap!(SequencePwm::new_1ch(pwm, ch0, config));
         let pwm = unwrap!(SequencePwm::new_1ch(pwm, ch0, config));
 
-        Output::new(en, Level::Low, OutputDrive::Standard).set_low();
+        Output::new(en, Level::Low, OutputDrive::Standard).set_high();
 
         let seq_words = [
             T0H, T0H, T0H, // G

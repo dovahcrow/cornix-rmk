@@ -1,11 +1,13 @@
+use defmt::unwrap;
 use embassy_time::Duration;
-use rmk::action::{EncoderAction, KeyAction};
+use rmk::action::{Action, EncoderAction, KeyAction};
 use rmk::combo::Combo;
 use rmk::config::macro_config::KeyboardMacrosConfig;
 use rmk::config::{CombosConfig, MorsesConfig};
 use rmk::heapless::Vec;
 use rmk::keyboard_macros::define_macro_sequences;
-use rmk::keycode::ModifierCombination;
+use rmk::keycode::{KeyCode, ModifierCombination};
+use rmk::morse::{Morse, MorseMode, MorsePattern};
 use rmk::{a, encoder, k, mt, wm};
 
 pub(crate) const COL: usize = 14;
@@ -121,20 +123,20 @@ pub fn get_combos() -> CombosConfig {
 }
 
 pub fn get_morses() -> MorsesConfig {
-    let morses = Vec::new();
+    let mut morses = Vec::new();
 
-    // let mut actions = Vec::new();
-    // unwrap!(actions.push((
-    //     MorsePattern::from_u16(0x10),
-    //     Action::Key(KeyCode::Backspace),
-    // )));
-    // unwrap!(actions.push((MorsePattern::from_u16(0x11), Action::LayerOn(2),)));
-    // unwrap!(morses.push(Morse {
-    //     timeout_ms: 50u16,
-    //     mode: MorseMode::HoldOnOtherPress,
-    //     unilateral_tap: false,
-    //     actions,
-    // }));
+    let mut actions = Vec::new();
+    unwrap!(actions.push((
+        MorsePattern::from_u16(0b10),
+        Action::Key(KeyCode::Backspace),
+    )));
+    unwrap!(actions.push((MorsePattern::from_u16(0b11), Action::LayerOn(2),)));
+    unwrap!(morses.push(Morse {
+        timeout_ms: 50u16,
+        mode: MorseMode::HoldOnOtherPress,
+        unilateral_tap: false,
+        actions,
+    }));
 
     // let mut actions = Vec::new();
     // unwrap!(actions.push((MorsePattern::from_u16(0x11), Action::LayerOn(3),)));
