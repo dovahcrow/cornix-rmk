@@ -27,9 +27,8 @@ use rand_core::SeedableRng;
 use rmk::ble::build_ble_stack;
 use rmk::channel::EVENT_CHANNEL;
 use rmk::config::{BehaviorConfig, BleBatteryConfig, RmkConfig, StorageConfig, TapHoldConfig};
-use rmk::controller::PollingController;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
-use rmk::futures::future::{join3, join4};
+use rmk::futures::future::{join, join4};
 use rmk::input_device::Runnable;
 use rmk::input_device::adc::{AnalogEventType, NrfAdc};
 use rmk::input_device::battery::BatteryProcessor;
@@ -49,10 +48,7 @@ use crate::constants::{
     INPUT_PIN_NUM, KEYBOARD_USB_CONFIG, L2CAP_MTU, L2CAP_RXQ, L2CAP_TXQ, OUTPUT_PIN_NUM,
 };
 use crate::keymap::{COL, NUM_ENCODER, NUM_LAYER, ROW};
-use crate::led::LedController;
 use crate::vial::VIAL_CONFIG;
-
-// embassy_nrf::interrupt_mod!(PWM0);
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<USBD>;
@@ -240,7 +236,6 @@ async fn main(spawner: Spawner) {
     );
     let mut batt_proc = BatteryProcessor::new(2000, 2806, &keymap);
 
-    let mut led_controller = LedController::new(p.PWM0, p.P0_24, p.P0_13);
     // Initialize the controllers
     // Start
     join4(
@@ -251,14 +246,13 @@ async fn main(spawner: Spawner) {
             EVENT_CHANNEL => [batt_proc],
         },
         keyboard.run(),
-        join3(
+        join(
             run_peripheral_manager::<INPUT_PIN_NUM, OUTPUT_PIN_NUM, 0, 7, _>(
                 0,
                 peripheral_addrs[0],
                 &stack,
             ),
             run_rmk(&keymap, driver, &stack, &mut storage, rmk_config),
-            led_controller.polling_loop(),
         ),
     )
     .await;
